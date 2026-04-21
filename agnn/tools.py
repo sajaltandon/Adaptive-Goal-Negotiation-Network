@@ -661,6 +661,16 @@ class DynamicMCPTool(Tool):
             return f"MCP Error: {str(e)}"
 
 class ToolRegistry:
+    BUILTIN_TOOL_ORDER = (
+        "list_dirs",
+        "read_file",
+        "write_file",
+        "write_text_file",
+        "verify_file",
+        "convert_markdown_to_pdf",
+        "bash",
+    )
+
     def __init__(self):
         self.tools: Dict[str, Tool] = {
             "read_file": FileReadTool(),
@@ -671,11 +681,13 @@ class ToolRegistry:
             "convert_markdown_to_pdf": ConvertMarkdownToPdfTool(),
             "bash": BashTool(),
         }
-        # Tool degradation is disabled by default because local LM Studio models
-        # frequently need the full tool surface to complete tasks at all.
-        # Re-enable only through an explicit env flag for targeted experiments.
-        self.enable_tool_degradation = os.environ.get("AGNN_ENABLE_TOOL_DEGRADATION", "").strip().lower() in {
+        self.force_full_tool_schema = os.environ.get("AGNN_FORCE_FULL_TOOL_SCHEMA", "").strip().lower() in {
             "1", "true", "yes", "on"
+        }
+        # Failure-driven trimming stays enabled by default, but can still be
+        # disabled explicitly for debugging if needed.
+        self.enable_tool_degradation = os.environ.get("AGNN_ENABLE_TOOL_DEGRADATION", "1").strip().lower() not in {
+            "0", "false", "no", "off"
         }
         
     def load_mcp_server(self, command: str, args: List[str]):
@@ -689,44 +701,155 @@ class ToolRegistry:
         except Exception as e:
             print(f"[Tools] Failed to load MCP server '{command}': {e}")
         
-    def get_schemas(self, model: str = "", failure_level: int = 0) -> List[Dict[str, Any]]:
-        all_schemas = [tool.get_schema() for tool in self.tools.values()]
+    @staticmethod
+    def _contains_any(text: str, patterns: List[str]) -> bool:
+        return any(re.search(pattern, text) for pattern in patterns)
 
-        if not model or not self.enable_tool_degradation:
-            return all_schemas
-            
-        model_lower = model.lower()
-        
-        # 1. Dynamic Outcome Memory (The ultimate future-proof rule)
-        # If any model (regardless of name/size) throws a 400 error, we dynamically shrink it.
-        if failure_level >= 2:
-            return [s for s in all_schemas if s["function"]["name"] in ["bash"]][:1]
-        if failure_level == 1:
-            return [s for s in all_schemas if s["function"]["name"] in ["bash", "read_file", "write_file"]][:3]
-            
-        # 2. Heuristic Cloud Detection
-        # Cloud providers (Groq, Gemini, OpenAI) almost always host massive models capable of full tools.
-        is_cloud = any(x in model_lower for x in ["groq/", "models/gemini", "gpt-", "claude-"])
-        if is_cloud:
-            return all_schemas
-            
-        # 3. Dynamic Parameter Size Extraction
-        # Look for numbers followed by 'b' or 'm' (e.g., 8b, 70b, 500m)
-        import re
-        match = re.search(r'(\d+)(?:\.\d+)?b', model_lower)
-        if match:
-            params = float(match.group(1))
-            if params >= 30: # 30B+ parameters (Large)
-                return all_schemas
-            elif params >= 10: # 10B-30B parameters (Medium)
-                return [s for s in all_schemas if s["function"]["name"] in ["bash", "read_file", "write_file", "search_web"]][:4]
-            else: # <10B parameters (Small)
-                return [s for s in all_schemas if s["function"]["name"] in ["bash", "read_file", "write_file"]][:2]
-                
-        # 4. Default Fallback
-        # If it's a completely unknown local model with no parameter count in the name,
-        # play it safe and start with a medium schema. The failure memory will shrink it if it crashes.
-        return [s for s in all_schemas if s["function"]["name"] in ["bash", "read_file", "write_file"]][:3]
+    @staticmethod
+    def _hint_tokens(task_hint: str) -> List[str]:
+        stopwords = {
+            "the", "and", "for", "with", "that", "this", "from", "into", "your",
+            "their", "have", "there", "about", "when", "then", "than", "also",
+            "using", "need", "want", "just", "make", "full", "many", "more",
+            "into", "onto", "after", "before", "while", "within", "should",
+            "could", "would", "them", "they", "what", "which", "where",
+        }
+        tokens = re.findall(r"[a-z][a-z0-9_-]{2,}", (task_hint or "").lower())
+        unique: List[str] = []
+        seen = set()
+        for token in tokens:
+            if token in stopwords or token in seen:
+                continue
+            seen.add(token)
+            unique.append(token)
+        return unique
+
+    def _score_builtin_tools(self, task_hint: str, phase_type: str) -> Dict[str, int]:
+        text = f"{phase_type or ''}\n{task_hint or ''}".lower()
+        scores = {name: 0 for name in self.BUILTIN_TOOL_ORDER}
+
+        explore_patterns = [
+            r"\banaly[sz]\w*\b", r"\bdebug\w*\b", r"\binspect\w*\b", r"\breview\w*\b",
+            r"\btrace\w*\b", r"\bexplor\w*\b", r"\bscan\w*\b", r"\bbrowse\w*\b",
+            r"\brepo\b", r"\brepositories?\b", r"\bworkspace\b", r"\bproject\b",
+            r"\bfolder\b", r"\bdirector\w*\b", r"\bpath\b", r"\blocate\b", r"\bfind\b",
+            r"\bissue\b", r"\berror\w*\b",
+        ]
+        read_patterns = explore_patterns + [
+            r"\bread\b", r"\bfile\b", r"\bsource\b", r"\bfunction\b", r"\bclass\b",
+            r"\bmodule\b", r"\bstack\b", r"\btraceback\b", r"\blog\b",
+        ]
+        code_write_patterns = [
+            r"\bfix\w*\b", r"\bpatch\w*\b", r"\bedit\w*\b", r"\bmodif\w*\b",
+            r"\bupdate\w*\b", r"\brefactor\w*\b", r"\bimplement\w*\b",
+            r"\bwrite code\b", r"\bchange(?: the)? code\b",
+            r"\bcreate (?:a |an )?(?:file|component|module|script|function|class)\b",
+        ]
+        text_write_patterns = [
+            r"\bmarkdown\b", r"\breport\b", r"\bdocument\b", r"\bsummary\b",
+            r"\bartifact\b", r"\bdeliverable\b", r"\bnotes?\b", r"\bproposal\b",
+            r"\bplan\b", r"\bwrite[- ]?up\b",
+        ]
+        verify_patterns = [
+            r"\bverify\w*\b", r"\bvalidat\w*\b", r"\bcheck\w*\b", r"\bconfirm\w*\b",
+            r"\bensure\b", r"\bnon[- ]?empty\b", r"\bexists?\b",
+        ]
+        pdf_patterns = [r"\bpdf\b", r"\bexport\b", r"\bprintable\b"]
+        shell_patterns = [
+            r"\bbash\b", r"\bshell\b", r"\bpowershell\b", r"\bcmd\b", r"\bterminal\b",
+            r"\bpytest\b", r"\bnpm\b", r"\bpnpm\b", r"\byarn\b", r"\bpip\b",
+            r"\bgit\b", r"\bbuild\b", r"\binstall\w*\b", r"\bserver\b",
+            r"\bstdout\b", r"\bstderr\b", r"\bport\b", r"\blogs?\b",
+        ]
+
+        if self._contains_any(text, explore_patterns):
+            scores["list_dirs"] += 6
+        if self._contains_any(text, read_patterns):
+            scores["read_file"] += 7
+        if self._contains_any(text, code_write_patterns):
+            scores["write_file"] += 7
+            scores["read_file"] += 3
+        if self._contains_any(text, text_write_patterns):
+            scores["write_text_file"] += 7
+        if self._contains_any(text, verify_patterns):
+            scores["verify_file"] += 5
+        if self._contains_any(text, pdf_patterns):
+            scores["convert_markdown_to_pdf"] += 8
+            scores["write_text_file"] += 3
+            scores["verify_file"] += 2
+        if self._contains_any(text, shell_patterns):
+            scores["bash"] += 7
+
+        phase = (phase_type or "").lower().strip()
+        if phase in {"research", "analysis", "review"}:
+            scores["read_file"] += 3
+            scores["list_dirs"] += 2
+        if phase == "draft":
+            scores["write_file"] += 1
+            scores["write_text_file"] += 1
+        if phase == "general" and max(scores.values()) == 0:
+            scores["read_file"] += 4
+            scores["list_dirs"] += 3
+
+        if max(scores.values()) == 0:
+            scores["read_file"] = 4
+            scores["list_dirs"] = 3
+
+        return scores
+
+    def _score_dynamic_tools(self, task_hint: str) -> Dict[str, int]:
+        hint_tokens = self._hint_tokens(task_hint)
+        scores: Dict[str, int] = {}
+        for name, tool in self.tools.items():
+            if name in self.BUILTIN_TOOL_ORDER:
+                continue
+            haystack = f"{tool.name} {tool.description}".lower()
+            name_tokens = set(re.findall(r"[a-z][a-z0-9_-]{2,}", tool.name.lower()))
+            score = 0
+            exact_name_match = False
+            for token in hint_tokens:
+                if token in name_tokens:
+                    score += 3
+                    exact_name_match = True
+                elif token in haystack:
+                    score += 1
+            if exact_name_match and score >= 3:
+                scores[name] = score
+        return scores
+
+    def _apply_failure_trim(self, tool_names: List[str], failure_level: int) -> List[str]:
+        if not tool_names or not self.enable_tool_degradation or failure_level <= 0:
+            return tool_names
+        max_tools = 3 if failure_level == 1 else 2
+        return tool_names[:max_tools]
+
+    def _select_tool_names(self, task_hint: str, phase_type: str, failure_level: int) -> List[str]:
+        builtin_scores = self._score_builtin_tools(task_hint, phase_type)
+        dynamic_scores = self._score_dynamic_tools(task_hint)
+        tie_order = {name: idx for idx, name in enumerate(self.tools.keys())}
+        ranked = sorted(
+            [item for item in {**builtin_scores, **dynamic_scores}.items() if item[1] > 0],
+            key=lambda item: (-item[1], tie_order.get(item[0], 999)),
+        )
+        selected = [name for name, _ in ranked]
+        return self._apply_failure_trim(selected, failure_level)
+
+    def get_schemas(
+        self,
+        model: str = "",
+        failure_level: int = 0,
+        task_hint: str = "",
+        phase_type: str = "",
+    ) -> List[Dict[str, Any]]:
+        schema_map = {name: tool.get_schema() for name, tool in self.tools.items()}
+        if self.force_full_tool_schema:
+            return [schema_map[name] for name in self.tools.keys()]
+
+        selected_names = self._select_tool_names(task_hint=task_hint, phase_type=phase_type, failure_level=failure_level)
+        if not selected_names:
+            selected_names = ["read_file", "list_dirs"]
+
+        return [schema_map[name] for name in selected_names if name in schema_map]
         
     def execute(self, tool_name: str, kwargs: Dict[str, Any], enforcer: PermissionEnforcer) -> str:
         tool = self.tools.get(tool_name)

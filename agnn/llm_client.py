@@ -48,12 +48,16 @@ def _probe_response_has_content(raw: Optional[Dict]) -> bool:
             msg = first.get("message")
             if isinstance(msg, dict):
                 content = (msg.get("content") or "").strip()
-                return len(content) > 0
+                reasoning = (msg.get("reasoning_content") or "").strip()
+                tool_calls = msg.get("tool_calls")
+                return len(content) > 0 or len(reasoning) > 0 or bool(tool_calls)
     # Native LM Studio shape: {"message": {"content": "..."}}
     msg = raw.get("message")
     if isinstance(msg, dict):
         content = (msg.get("content") or "").strip()
-        return len(content) > 0
+        reasoning = (msg.get("reasoning_content") or "").strip()
+        tool_calls = msg.get("tool_calls")
+        return len(content) > 0 or len(reasoning) > 0 or bool(tool_calls)
     # If we got an "error" key or only a string "message", it's a failure
     return False
 
@@ -98,7 +102,7 @@ def configure_parallel_slots(base_url: str, model: str, max_slots: int = 4) -> i
 
         # Determine best working URL (prefer OpenAI-compat /v1 for broader support)
         probe_url: Optional[str] = None
-        for api in _candidate_api_prefixes(base_url):
+        for api in _candidate_chat_api_prefixes(base_url):
             url = f"{api}/chat" if api.endswith("/api/v1") else f"{api}/chat/completions"
             try:
                 raw = _http_post_json(url, _make_payload(0), timeout=20.0)
@@ -231,6 +235,19 @@ def _candidate_api_prefixes(base_url: str) -> List[str]:
         return [clean, f"{root}/api/v1"]
 
     return [f"{clean}/api/v1", f"{clean}/v1"]
+
+
+def _candidate_chat_api_prefixes(base_url: str) -> List[str]:
+    """
+    Prefer the OpenAI-compatible /v1 endpoint for chat completions.
+
+    Some LM Studio builds expose /api/v1/models successfully while still
+    rejecting normal /api/v1/chat payloads that work on /v1/chat/completions.
+    """
+    prefixes = _candidate_api_prefixes(base_url)
+    openai_compat = [api for api in prefixes if api.endswith("/v1")]
+    native = [api for api in prefixes if api.endswith("/api/v1")]
+    return openai_compat + native
 
 
 def _filter_chat_models(model_ids: List[str]) -> List[str]:
@@ -416,6 +433,49 @@ def _extract_content_and_tokens(data: Dict[str, Any]) -> Tuple[str, Optional[int
             return value.strip(), int(total_tokens) if isinstance(total_tokens, int) else None, None
 
     raise ValueError(f"No assistant text in response. Keys: {list(data.keys())}")
+
+
+def _tool_schema_name(schema: Dict[str, Any]) -> str:
+    if not isinstance(schema, dict):
+        return ""
+    fn = schema.get("function")
+    if isinstance(fn, dict):
+        return str(fn.get("name") or "").strip()
+    return ""
+
+
+def _build_tool_variants(tools: Optional[List[Dict[str, Any]]]) -> List[Optional[List[Dict[str, Any]]]]:
+    if not tools:
+        return [None]
+
+    variants: List[List[Dict[str, Any]]] = [tools]
+    for limit in (4, 3, 2, 1):
+        if len(tools) > limit:
+            variants.append(tools[:limit])
+
+    unique: List[List[Dict[str, Any]]] = []
+    seen = set()
+    for variant in variants:
+        names = tuple(_tool_schema_name(schema) for schema in variant)
+        if names in seen:
+            continue
+        seen.add(names)
+        unique.append(variant)
+    return unique
+
+
+def _looks_like_schema_rejection(error_text: str) -> bool:
+    lowered = (error_text or "").lower()
+    if "400" not in lowered and "schema" not in lowered and "tool" not in lowered:
+        return False
+    try:
+        from .error_catalog import classify_error
+        entry = classify_error(error_text, provider_hint="lmstudio")
+        if entry and entry.code == "LMS_400_SCHEMA_REJECTION":
+            return True
+    except Exception:
+        pass
+    return "400" in lowered and any(token in lowered for token in ("tool", "schema", "bad request"))
 
 
 # ----------------------------
@@ -667,43 +727,29 @@ def chat_completion(
                 f"estimated {estimated_tokens} tokens > ~2500 limit for small model '{model}')"
             )
 
-    openai_payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": False,
-    }
-    if tools:
-        openai_payload["tools"] = tools
-        openai_payload["tool_choice"] = tool_choice
-
-    native_payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": False,
-    }
-    if tools:
-        native_payload["tools"] = tools
-        native_payload["tool_choice"] = tool_choice
-
     start = time.time()
     _INFERENCE_LOCK.acquire()
     try:
-        errors: List[str] = []
-
         # --- CLOUD ROUTING INTERCEPT ---
         # If the model is a cloud model, bypass LM Studio entirely.
         cloud_url = None
+        tool_variants = _build_tool_variants(tools)
         if model.startswith("groq/"):
             cloud_url = "https://api.groq.com/openai/v1/chat/completions"
-            openai_payload["model"] = model.replace("groq/", "")
         elif model.startswith("models/gemini"):
             cloud_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
         if cloud_url:
+            openai_payload: Dict[str, Any] = {
+                "model": model.replace("groq/", "") if model.startswith("groq/") else model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": False,
+            }
+            if tools:
+                openai_payload["tools"] = tools
+                openai_payload["tool_choice"] = tool_choice
             try:
                 data = _request_with_retries(
                     lambda: _http_post_json(cloud_url, openai_payload, timeout=timeout),
@@ -726,41 +772,77 @@ def chat_completion(
             except Exception as cloud_exc:
                 raise RuntimeError(f"Chat completion failed for {model}: {cloud_exc} (latency: {time.time()-start:.2f}s)") from cloud_exc
 
-        for api in _candidate_api_prefixes(base_url):
-            is_native = api.endswith("/api/v1")
-            url = f"{api}/chat" if is_native else f"{api}/chat/completions"
-            payload = native_payload if is_native else openai_payload
+        final_errors: List[str] = []
+        for variant in tool_variants:
+            variant_errors: List[str] = []
+            should_try_smaller = False
 
-            try:
-                data = _request_with_retries(
-                    lambda: _http_post_json(url, payload, timeout=timeout),
-                    retries=3,
-                    base_sleep=0.5,
-                    provider_hint="lmstudio",
-                    verbose_errors=True,
-                )
+            openai_payload = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": False,
+            }
+            native_payload = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": False,
+            }
+            if variant:
+                openai_payload["tools"] = variant
+                openai_payload["tool_choice"] = tool_choice
+                native_payload["tools"] = variant
+                native_payload["tool_choice"] = tool_choice
 
-                if isinstance(data, dict) and "error" in data:
-                    raise ValueError(f"LM Studio error: {data['error']}")
+            for api in _candidate_chat_api_prefixes(base_url):
+                is_native = api.endswith("/api/v1")
+                if variant and is_native:
+                    # LM Studio's native /api/v1/chat endpoint rejects valid tool
+                    # payloads that succeed on the OpenAI-compatible /v1 endpoint.
+                    continue
+                url = f"{api}/chat" if is_native else f"{api}/chat/completions"
+                payload = native_payload if is_native else openai_payload
 
-                content, total_tokens, tool_calls = _extract_content_and_tokens(data if isinstance(data, dict) else {})
-                if not content and not tool_calls:
-                    raise ValueError("empty response content and no tool calls")
+                try:
+                    data = _request_with_retries(
+                        lambda: _http_post_json(url, payload, timeout=timeout),
+                        retries=3,
+                        base_sleep=0.5,
+                        provider_hint="lmstudio",
+                        verbose_errors=True,
+                    )
 
-                latency = time.time() - start
-                tokens_used = int(total_tokens) if total_tokens is not None else max(0, len(content) // 4)
+                    if isinstance(data, dict) and "error" in data:
+                        raise ValueError(f"LM Studio error: {data['error']}")
 
-                return LLMResponse(
-                    text=content,
-                    model=model,
-                    tokens_used=tokens_used,
-                    latency_seconds=latency,
-                    tool_calls=tool_calls,
-                )
-            except Exception as endpoint_exc:
-                errors.append(f"{url}: {endpoint_exc}")
+                    content, total_tokens, tool_calls = _extract_content_and_tokens(data if isinstance(data, dict) else {})
+                    if not content and not tool_calls:
+                        raise ValueError("empty response content and no tool calls")
 
-        raise RuntimeError(" | ".join(errors))
+                    latency = time.time() - start
+                    tokens_used = int(total_tokens) if total_tokens is not None else max(0, len(content) // 4)
+
+                    return LLMResponse(
+                        text=content,
+                        model=model,
+                        tokens_used=tokens_used,
+                        latency_seconds=latency,
+                        tool_calls=tool_calls,
+                    )
+                except Exception as endpoint_exc:
+                    err_text = f"{url}: {endpoint_exc}"
+                    variant_errors.append(err_text)
+                    if variant and len(variant) > 1 and _looks_like_schema_rejection(str(endpoint_exc)):
+                        should_try_smaller = True
+
+            final_errors = variant_errors
+            if not should_try_smaller:
+                break
+
+        raise RuntimeError(" | ".join(final_errors))
 
     except Exception as e:
         latency = time.time() - start

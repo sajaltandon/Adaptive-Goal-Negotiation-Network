@@ -1260,6 +1260,12 @@ class Orchestrator:
             ctx         = self._build_agent_context(ws, user_prompt)
             next_turn   = ws.turn_count + 1
             token_cb    = self.display.make_token_cb(ws_label, turn=next_turn) if streaming_enabled else None
+            tool_schemas = self.tool_registry.get_schemas(
+                model=agent.model,
+                failure_level=failure_count,
+                task_hint=ctx["user_prompt"],
+                phase_type=subgoal.phase_type,
+            )
             try:
                 if streaming_enabled:
                     response = stream_chat_completion(
@@ -1271,7 +1277,7 @@ class Orchestrator:
                         max_tokens=self._get_max_tokens_for_phase(agent.model),
                         temperature=0.7,
                         on_token=token_cb,
-                        tools=self.tool_registry.get_schemas(model=agent.model, failure_level=failure_count),
+                        tools=tool_schemas,
                     )
                     self.display.stream_end(ws_label)
                 else:
@@ -1283,7 +1289,7 @@ class Orchestrator:
                         timeout=120.0,
                         max_tokens=self._get_max_tokens_for_phase(agent.model),
                         temperature=0.7,
-                        tools=self.tool_registry.get_schemas(model=agent.model, failure_level=failure_count),
+                        tools=tool_schemas,
                     )
                 failure_count = 0
 
@@ -1702,7 +1708,6 @@ class Orchestrator:
         """Minimal single-agent fallback used when Tier-2 is unavailable."""
         print("[Fallback] Running single-agent mode (Tier-2 unavailable).")
         agent = agents[0]
-        tools = self.tool_registry.get_schemas(model=agent.model) if hasattr(self, 'tool_registry') and self.tool_registry else None
         required_outputs = self._extract_explicit_output_paths(user_prompt)
         required_output_paths = [p for p in [required_outputs.get("markdown"), required_outputs.get("pdf")] if p]
         verified_required_outputs: Dict[str, bool] = {p: False for p in required_output_paths}
@@ -1735,6 +1740,11 @@ class Orchestrator:
                         "- Use write_text_file for markdown and convert_markdown_to_pdf for PDF.\n"
                         "- Then call verify_file on each required output with min_size_bytes >= 1.\n"
                     )
+                tools = self.tool_registry.get_schemas(
+                    model=agent.model,
+                    task_hint=f"{user_prompt}\n{output_contract}",
+                    phase_type="general",
+                ) if hasattr(self, 'tool_registry') and self.tool_registry else None
                 resp = chat_completion(
                     system_prompt=sys_prompt,
                     user_prompt=(
@@ -1869,6 +1879,12 @@ class Orchestrator:
             self.termination_reason = "failed_verification_gate"
         elif requires_verify_gate and not verify_success:
             self.termination_reason = "failed_verification_gate"
+        elif not any(
+            (msg.content or "").strip() and not (msg.content or "").lstrip().startswith("[TOOL]")
+            for msg in self.accepted
+        ):
+            self.termination_reason = self.termination_reason or "tool_only_run"
+            return self.accepted
         self._finalize_conversation()
         return self.accepted
 
@@ -2725,9 +2741,54 @@ class Orchestrator:
         print(f"[Validation] Healthy models: {healthy_count}/{len(self.models)}")
         return health
 
+    def _validate_models(self) -> Dict[str, bool]:
+        """Test each model before run; return per-model health map."""
+        print("[Validation] Testing model reliability...")
 
+        health: Dict[str, bool] = {}
+        for model in self.models:
+            try:
+                probe_prompt = "Call the list_dirs tool with path='.' and do not answer with prose."
+                if hasattr(self, "tool_registry") and self.tool_registry:
+                    probe_tools = [
+                        self.tool_registry.tools["read_file"].get_schema(),
+                        self.tool_registry.tools["list_dirs"].get_schema(),
+                    ]
+                else:
+                    probe_tools = None
+                test_response = chat_completion(
+                    system_prompt="You must use tools when the user explicitly requests one.",
+                    user_prompt=probe_prompt,
+                    model=model,
+                    base_url=self.base_url,
+                    timeout=90.0,
+                    max_tokens=80,
+                    temperature=0.0,
+                    tools=probe_tools,
+                    tool_choice="auto",
+                )
 
+                tool_calls = test_response.tool_calls or []
+                used_list_dirs = any(
+                    isinstance(tc, dict) and tc.get("function", {}).get("name") == "list_dirs"
+                    for tc in tool_calls
+                )
+                if used_list_dirs:
+                    print(f"[Validation] ✓ Model {model} can issue tool calls")
+                    health[model] = True
+                elif (test_response.text or "").strip():
+                    print(f"[Validation] ✓ Model {model} responded without tools")
+                    health[model] = True
+                else:
+                    preview = (test_response.text or "")[:100]
+                    print(f"[Validation] WARNING: Model {model} gave unexpected probe response: {preview}")
+                    health[model] = False
 
+            except Exception as e:
+                print(f"[Validation] ERROR: Model {model} failed test: {e}")
+                health[model] = False
 
-
+        healthy_count = sum(1 for ok in health.values() if ok)
+        print(f"[Validation] Healthy models: {healthy_count}/{len(self.models)}")
+        return health
 
