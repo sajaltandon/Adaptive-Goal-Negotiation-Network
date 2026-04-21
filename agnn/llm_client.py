@@ -588,6 +588,7 @@ def stream_chat_completion(
     on_token=None,          # Callable[[str], None] — called for each streamed token
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: str = "auto",
+    retry_attempts: int = 3,
 ) -> "LLMResponse":
     """
     Streaming version of chat_completion.
@@ -608,6 +609,7 @@ def stream_chat_completion(
             timeout=timeout,
             max_tokens=max_tokens,
             temperature=temperature,
+            retry_attempts=retry_attempts,
         )
 
     messages = [
@@ -647,6 +649,7 @@ def stream_chat_completion(
             temperature=temperature,
             tools=tools,
             tool_choice=tool_choice,
+            retry_attempts=retry_attempts,
         )
 
     start = time.time()
@@ -684,6 +687,7 @@ def stream_chat_completion(
             timeout=timeout,
             max_tokens=max_tokens,
             temperature=temperature,
+            retry_attempts=retry_attempts,
         )
 
     except Exception as e:
@@ -706,6 +710,7 @@ def chat_completion(
     temperature: float = DEFAULT_TEMPERATURE,
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: str = "auto",
+    retry_attempts: int = 3,
 ) -> LLMResponse:
     """
     Send chat request to LM Studio.
@@ -753,7 +758,7 @@ def chat_completion(
             try:
                 data = _request_with_retries(
                     lambda: _http_post_json(cloud_url, openai_payload, timeout=timeout),
-                    retries=2,
+                    retries=max(1, retry_attempts),
                     base_sleep=1.0,
                     provider_hint="groq" if model.startswith("groq/") else "gemini",
                     verbose_errors=True,
@@ -809,7 +814,7 @@ def chat_completion(
                 try:
                     data = _request_with_retries(
                         lambda: _http_post_json(url, payload, timeout=timeout),
-                        retries=3,
+                        retries=max(1, retry_attempts),
                         base_sleep=0.5,
                         provider_hint="lmstudio",
                         verbose_errors=True,

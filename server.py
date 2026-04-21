@@ -17,9 +17,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agnn.orchestrator import Orchestrator
-from agnn.llm_client import list_models
+from agnn.llm_client import list_models, chat_completion
 from agnn.task_analyzer import analyze_task
 from agnn.model_selector import select_models
+from agnn.tools import ToolRegistry
 
 
 app = FastAPI(title="AGNN API", version="0.1.0")
@@ -79,6 +80,51 @@ def _normalize_model_pool(discovered: List[str], requested: List[str]) -> List[s
     return requested_existing
 
 
+def _preflight_models(base_url: str, models: List[str]) -> tuple[List[str], List[str]]:
+    """Probe tool-capable health before selection so auto mode avoids broken models."""
+    import os as _os
+
+    registry = ToolRegistry()
+    probe_tools = [
+        registry.tools["read_file"].get_schema(),
+        registry.tools["list_dirs"].get_schema(),
+    ]
+    healthy: List[str] = []
+    unhealthy: List[str] = []
+
+    _os.environ["_AGNN_PROBE_MODE"] = "1"
+    try:
+        for model in models:
+            try:
+                resp = chat_completion(
+                    system_prompt="You must use tools when the user explicitly requests one.",
+                    user_prompt="Call the list_dirs tool with path='.' and do not answer with prose.",
+                    model=model,
+                    base_url=base_url,
+                    timeout=90.0,
+                    max_tokens=80,
+                    temperature=0.0,
+                    tools=probe_tools,
+                    tool_choice="auto",
+                    retry_attempts=1,
+                )
+                tool_calls = resp.tool_calls or []
+                used_list_dirs = any(
+                    isinstance(tc, dict) and tc.get("function", {}).get("name") == "list_dirs"
+                    for tc in tool_calls
+                )
+                if used_list_dirs or (resp.text or "").strip():
+                    healthy.append(model)
+                else:
+                    unhealthy.append(model)
+            except Exception:
+                unhealthy.append(model)
+    finally:
+        _os.environ.pop("_AGNN_PROBE_MODE", None)
+
+    return healthy, unhealthy
+
+
 def _run_task(run_id: str, req: RunRequest) -> None:
     try:
         requested_models = [m.strip() for m in req.models if m and m.strip()]
@@ -91,13 +137,23 @@ def _run_task(run_id: str, req: RunRequest) -> None:
         else:
             model_pool = _normalize_model_pool(discovered, requested_models)
 
+        healthy_pool, unhealthy_pool = _preflight_models(req.base_url, model_pool)
+        if healthy_pool:
+            model_pool = healthy_pool
+        _emit(run_id, {
+            "type": "model_preflight",
+            "healthy_models": healthy_pool,
+            "unhealthy_models": unhealthy_pool,
+            "timestamp": time.time(),
+        })
+
         profiler_model = model_pool[0] if model_pool else None
         analysis = analyze_task(
             req.prompt,
             available_model_count=len(model_pool),
             base_url=req.base_url,
             profiler_model=profiler_model,
-            llm_passes=3,
+            llm_passes=1,
         )
         _emit(run_id, {
             "type": "task_analysis",
@@ -197,11 +253,14 @@ def rank_models(req: RankRequest) -> Dict:
     if not discovered:
         raise HTTPException(status_code=502, detail="No models found at LM Studio URL")
 
-    profiler_model = discovered[0]
+    healthy_models, unhealthy_models = _preflight_models(req.base_url, discovered)
+    candidate_models = healthy_models or discovered
+
+    profiler_model = candidate_models[0]
     try:
         analysis = analyze_task(
             req.prompt or "General multi-agent task requiring research, analysis and synthesis.",
-            available_model_count=len(discovered),
+            available_model_count=len(candidate_models),
             base_url=req.base_url,
             profiler_model=profiler_model,
             llm_passes=1,
@@ -209,26 +268,28 @@ def rank_models(req: RankRequest) -> Dict:
     except Exception:
         return {
             "ranked_models": [{"model": m, "score": round(0.9 - i * 0.05, 2), "selected": i < req.max_agents}
-                               for i, m in enumerate(discovered)],
-            "selected_models": discovered[:req.max_agents],
+                               for i, m in enumerate(candidate_models)],
+            "selected_models": candidate_models[:req.max_agents],
             "rationale": [],
             "task_type": "general",
             "complexity": "unknown",
+            "healthy_models": healthy_models,
+            "unhealthy_models": unhealthy_models,
         }
 
     try:
         selection = select_models(
             base_url=req.base_url,
-            models=discovered,
+            models=candidate_models,
             analysis=analysis,
             max_agents=req.max_agents,
             enable_probe=False,
         )
-        selected = selection.get("selected_models", []) or discovered[:req.max_agents]
+        selected = selection.get("selected_models", []) or candidate_models[:req.max_agents]
         rationale = selection.get("rationale", [])
     except Exception as e:
         print(f"Error selecting models: {e}")
-        selected = discovered[:req.max_agents]
+        selected = candidate_models[:req.max_agents]
         rationale = []
 
     selected_set = set(selected)
@@ -237,7 +298,7 @@ def rank_models(req: RankRequest) -> Dict:
     for m in selected:
         ranked.append({"model": m, "score": round(score, 2), "selected": True})
         score -= 0.06
-    for m in discovered:
+    for m in candidate_models:
         if m not in selected_set:
             ranked.append({"model": m, "score": round(max(0.05, score), 2), "selected": False})
             score -= 0.04
@@ -251,6 +312,8 @@ def rank_models(req: RankRequest) -> Dict:
         "team_size": getattr(analysis, "team_size", len(selected)),
         "budget": getattr(analysis, "budget", "quality_first"),
         "sub_steps": getattr(analysis, "sub_steps", []),
+        "healthy_models": healthy_models,
+        "unhealthy_models": unhealthy_models,
     }
 
 
@@ -264,25 +327,33 @@ class ProbeRequest(BaseModel):
 @app.post("/probe-model")
 def probe_model(req: ProbeRequest) -> Dict:
     """Quick single-shot probe: is this model responsive?"""
-    import urllib.request as _ur
-    import json as _json
     import time as _time
-    payload = _json.dumps({
-        "model": req.model,
-        "messages": [{"role": "user", "content": "Reply with one word: ready"}],
-        "max_tokens": 10, "temperature": 0, "stream": False,
-    }).encode()
-    base = req.base_url.rstrip("/")
-    if not base.endswith("/v1"):
-        base = base + "/v1"
+    registry = ToolRegistry()
+    probe_tools = [
+        registry.tools["read_file"].get_schema(),
+        registry.tools["list_dirs"].get_schema(),
+    ]
     t0 = _time.time()
     try:
-        res = _ur.urlopen(
-            _ur.Request(f"{base}/chat/completions", data=payload,
-                        headers={"Content-Type": "application/json"}, method="POST"),
-            timeout=14,
+        resp = chat_completion(
+            system_prompt="You must use tools when the user explicitly requests one.",
+            user_prompt="Call the list_dirs tool with path='.' and do not answer with prose.",
+            model=req.model,
+            base_url=req.base_url,
+            timeout=90.0,
+            max_tokens=80,
+            temperature=0.0,
+            tools=probe_tools,
+            tool_choice="auto",
+            retry_attempts=1,
         )
-        res.read()
+        tool_calls = resp.tool_calls or []
+        used_list_dirs = any(
+            isinstance(tc, dict) and tc.get("function", {}).get("name") == "list_dirs"
+            for tc in tool_calls
+        )
+        if not used_list_dirs and not (resp.text or "").strip():
+            return {"model": req.model, "ok": False, "latency_ms": int((_time.time() - t0) * 1000), "error": "unexpected probe response"}
         return {"model": req.model, "ok": True, "latency_ms": int((_time.time() - t0) * 1000)}
     except Exception as exc:
         return {"model": req.model, "ok": False, "latency_ms": None, "error": str(exc)[:120]}

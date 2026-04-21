@@ -385,8 +385,9 @@ class Orchestrator:
         if self.enable_tier2:
             self._initialize_tier2_dag(self.planning_prompt or user_prompt, agents)
 
-        # Tier-1: Role Bidding (Agents bid on the generated DAG subgoals)
-        if self.enable_tier1 and len(agents) > 1:
+        # Tier-1 only makes sense when Tier-2 planning actually exists.
+        # If Tier-2 is disabled or failed to initialize, skip straight to fallback.
+        if self.enable_tier1 and self.enable_tier2 and self.phase_controller and len(agents) > 1:
             subgoals = self.phase_controller.subgoals if self.phase_controller else []
             self._initialize_tier1(self.planning_prompt or user_prompt, agents, subgoals=subgoals)
 
@@ -841,6 +842,7 @@ class Orchestrator:
             exclude_subgoal_id=ws.subgoal.id
         )
 
+        workspace_root = self.permission_enforcer.workspace_root
         user = (
             f"Task: {user_prompt}\n\n"
             f"Your assignment: {subgoal.description}\n"
@@ -860,6 +862,8 @@ class Orchestrator:
             )
             + "\n\nExecution constraints:"
             + "\n- Environment is Windows; use Windows-compatible commands/tools only."
+            + f"\n- Workspace root is: {workspace_root}"
+            + "\n- Prefer relative paths from the workspace root. Use '.' for the root directory."
             + "\n- Do not suggest Linux-specific paths/commands like /proc, ls -l, grep."
             + "\n- For numeric claims, label each as [Verified], [Estimated], or [Assumption]."
             + f"\n\n{advance_instruction}"
@@ -891,6 +895,7 @@ class Orchestrator:
             for m in recent
         )
 
+        workspace_root = self.permission_enforcer.workspace_root
         user = (
             f"Task: {user_prompt}\n\n"
             f"Team goal: {ws.subgoal.description}\n"
@@ -898,6 +903,8 @@ class Orchestrator:
             + upstream_block
             + "\n\nTeam discussion so far:\n"
             + (history if history else "Discussion starting now.")
+            + f"\n\nWorkspace root: {workspace_root}"
+            + "\nPrefer relative paths from the workspace root. Use '.' for the root directory."
             + f"\n\nContribute as {role_name}. Build on what others have said."
         )
 
@@ -1711,6 +1718,7 @@ class Orchestrator:
         required_outputs = self._extract_explicit_output_paths(user_prompt)
         required_output_paths = [p for p in [required_outputs.get("markdown"), required_outputs.get("pdf")] if p]
         verified_required_outputs: Dict[str, bool] = {p: False for p in required_output_paths}
+        fallback_history: List[str] = []
 
         # Register agent with the dashboard so Active Agents panel populates
         if hasattr(self.display, 'workspace_start'):
@@ -1729,6 +1737,7 @@ class Orchestrator:
         if required_output_paths:
             requires_verify_gate = True
 
+        workspace_root = self.permission_enforcer.workspace_root
         for turn in range(1, min(self.max_turns + 1, 12)):  # cap fallback at 12 turns
             try:
                 output_contract = ""
@@ -1738,31 +1747,51 @@ class Orchestrator:
                         f"- Write markdown to: {required_outputs.get('markdown') or '(none specified)'}\n"
                         f"- Generate PDF to: {required_outputs.get('pdf') or '(none specified)'}\n"
                         "- Use write_text_file for markdown and convert_markdown_to_pdf for PDF.\n"
-                        "- Then call verify_file on each required output with min_size_bytes >= 1.\n"
+                        "- Then call verify_file on each required output with min_bytes >= 1.\n"
                     )
+                history_block = ""
+                if fallback_history:
+                    history_block = (
+                        "Execution transcript so far:\n"
+                        + "\n".join(fallback_history[-10:])
+                        + "\n\n"
+                    )
+                summary_hint = (
+                    "If the transcript already contains enough evidence to answer the task, "
+                    "do not call more tools. Write the final answer now.\n"
+                    if tool_successes > 0 and tool_failures == 0 else
+                    "Use tools only when they are still necessary.\n"
+                )
                 tools = self.tool_registry.get_schemas(
                     model=agent.model,
-                    task_hint=f"{user_prompt}\n{output_contract}",
+                    task_hint=f"{user_prompt}\n{output_contract}\n{history_block}",
                     phase_type="general",
                 ) if hasattr(self, 'tool_registry') and self.tool_registry else None
+                fallback_timeout = 75.0 if tool_successes == 0 else 60.0
+                fallback_max_tokens = 420 if tool_successes == 0 else 260
                 resp = chat_completion(
                     system_prompt=sys_prompt,
                     user_prompt=(
                         f"Task: {user_prompt}\n\n"
                         f"Turn {turn}: Use tools to complete this task.\n"
                         f"Environment: Windows shell.\n"
+                        f"Workspace root: {workspace_root}\n"
+                        "Prefer relative paths from the workspace root. Use '.' for the root directory.\n"
                         f"Use Windows-compatible commands/tools (PowerShell/cmd semantics), avoid unix-only commands.\n"
                         f"Before final summary, verify outputs explicitly (file exists, non-empty, expected content).\n"
+                        f"{summary_hint}"
+                        f"{history_block}"
                         f"{output_contract}\n"
                         f"When done, summarise what you did and include verification results."
                     ),
                     model=agent.model,
                     base_url=self.base_url,
-                    timeout=120.0,
-                    max_tokens=800,   # keep response short to save context
-                    temperature=0.3,
+                    timeout=fallback_timeout,
+                    max_tokens=fallback_max_tokens,
+                    temperature=0.2,
                     tools=tools,
                     tool_choice="auto",
+                    retry_attempts=1,
                 )
 
                 # Handle tool calls
@@ -1781,10 +1810,15 @@ class Orchestrator:
 
                         try:
                             tool_result = self.tool_registry.execute(fn_name, fn_args, self.permission_enforcer)
-                            if any(x in tool_result for x in ("EXIT_CODE: 0", "WRITE_OK", "ok=True", "ok=true")):
-                                tool_successes += 1
-                            if any(x in tool_result for x in ("EXIT_CODE: 1", "EXIT_CODE: 2", "Error:", "STDERR:", "ok=False", "ok=false")):
+                            tool_lower = tool_result.lower()
+                            is_tool_failure = any(x in tool_lower for x in (
+                                "exit_code: 1", "exit_code: 2", "error:", "stderr:",
+                                "ok=false", "tool error:", "mcp error:"
+                            ))
+                            if is_tool_failure:
                                 tool_failures += 1
+                            elif tool_result.strip():
+                                tool_successes += 1
                             if fn_name == "verify_file" and ("ok=True" in tool_result or "ok=true" in tool_result):
                                 verify_success = True
                                 verified_target = str(fn_args.get("path") or fn_args.get("file_path") or "").strip()
@@ -1811,37 +1845,53 @@ class Orchestrator:
                             metrics={"TIS": 0.9},
                             timestamp=time.time(), phase="general", phase_id=0,
                         ))
+                        fallback_history.append(f"[TOOL] {fn_name}({fn_args}) -> {tool_result}")
 
                     # Update dashboard progress
                     if hasattr(self.display, 'turn_accepted'):
                         self.display.turn_accepted(agent.id, "general", turn, f"Tool:{fn_name}", 0.9)
 
-                    # If we've run several tools successfully, ask for a summary next turn
-                    if tool_successes >= 4:
-                        if required_output_paths:
-                            missing = [p for p, ok in verified_required_outputs.items() if not ok]
-                            if missing:
-                                continue
+                    summary_ready = (
+                        tool_successes >= 1
+                        and tool_failures == 0
+                        and (not requires_verify_gate or verify_success)
+                        and (not required_output_paths or all(verified_required_outputs.values()))
+                        and turn >= min(self.max_turns, 12)
+                    )
+                    if summary_ready:
                         # Force a final summary turn
                         try:
                             summary_resp = chat_completion(
                                 system_prompt=sys_prompt,
-                                user_prompt=f"Task complete. Summarise what you did for: {user_prompt}",
+                                user_prompt=(
+                                    f"Task: {user_prompt}\n\n"
+                                    "Use the execution transcript below to answer the user directly.\n"
+                                    "Do not call tools. Do not invent results not present in the transcript.\n\n"
+                                    + "\n".join(fallback_history[-12:])
+                                ),
                                 model=agent.model,
                                 base_url=self.base_url,
                                 timeout=60.0,
-                                max_tokens=400,
-                                temperature=0.3,
+                                max_tokens=280,
+                                temperature=0.2,
+                                retry_attempts=1,
                             )
                             if summary_resp.text:
+                                cleaned_summary = self._sanitize_message(summary_resp.text)
                                 self.accepted.append(AcceptedMessage(
                                     turn=turn+1, agent_id=agent.id, model=agent.model,
-                                    content=self._sanitize_message(summary_resp.text),
+                                    content=cleaned_summary,
                                     metrics={"TIS": 0.8},
                                     timestamp=time.time(), phase="general", phase_id=0,
                                 ))
+                                fallback_history.append(cleaned_summary)
+                                if hasattr(self.display, 'turn_accepted'):
+                                    self.display.turn_accepted(agent.id, "general", turn + 1, cleaned_summary[:50], 0.8)
+                                text_completions += 1
+                            else:
+                                continue
                         except Exception:
-                            pass
+                            continue
                         break  # done — don't loop forever after task success
                     continue
 
@@ -1852,6 +1902,7 @@ class Orchestrator:
                         content=cleaned, metrics={"TIS": 0.7},
                         timestamp=time.time(), phase="general", phase_id=0,
                     ))
+                    fallback_history.append(cleaned)
                     if hasattr(self.display, 'turn_accepted'):
                         self.display.turn_accepted(agent.id, "general", turn, cleaned[:50], 0.7)
                     text_completions += 1
@@ -1870,6 +1921,23 @@ class Orchestrator:
                 print(f"[Fallback] Turn {turn} error: {e}")
                 break
 
+        if tool_successes >= 1 and text_completions == 0 and fallback_history:
+            deterministic_summary = (
+                "Completed the task using tool execution.\n\n"
+                "Execution results:\n"
+                + "\n".join(f"- {line[:400]}" for line in fallback_history[-8:])
+            )
+            self.accepted.append(AcceptedMessage(
+                turn=min(self.max_turns + 1, 13),
+                agent_id=agent.id,
+                model=agent.model,
+                content=deterministic_summary,
+                metrics={"TIS": 0.75},
+                timestamp=time.time(),
+                phase="general",
+                phase_id=0,
+            ))
+            text_completions += 1
 
         # Mark agent as done in the dashboard
         if hasattr(self.display, 'workspace_done'):
@@ -1885,6 +1953,8 @@ class Orchestrator:
         ):
             self.termination_reason = self.termination_reason or "tool_only_run"
             return self.accepted
+        else:
+            self.termination_reason = self.termination_reason or "completed"
         self._finalize_conversation()
         return self.accepted
 
@@ -1909,7 +1979,7 @@ class Orchestrator:
         try:
             result = self.tool_registry.execute(
                 "verify_file",
-                {"path": path, "min_size_bytes": 1},
+                {"path": path, "min_bytes": 1},
                 self.permission_enforcer,
             )
             if "ok=True" in result or "ok=true" in result:
@@ -2424,6 +2494,20 @@ class Orchestrator:
             }
             for msg in self.accepted
         ]
+        substantive_messages = [
+            msg for msg in accepted_messages_data
+            if isinstance(msg.get("content"), str)
+            and msg["content"].strip()
+            and not msg["content"].lstrip().startswith("[TOOL]")
+        ]
+        total_substantive_chars = sum(len(msg["content"]) for msg in substantive_messages)
+        explicit_outputs = self._extract_explicit_output_paths(self.user_prompt)
+        should_postprocess = bool(substantive_messages) and (
+            self.enable_tier2
+            or bool(explicit_outputs.get("markdown") or explicit_outputs.get("pdf"))
+            or len(substantive_messages) >= 3
+            or total_substantive_chars >= 1200
+        )
         
         
         # Build comprehensive subgoal information
@@ -2586,6 +2670,8 @@ class Orchestrator:
 
             # --- POST-RUN SYNTHESIS: produce one clean Markdown deliverable ---
             try:
+                if not should_postprocess:
+                    raise StopIteration("skip_short_run")
                 best_model = self.models[0] if self.models else ""
                 synth_result = synthesize(
                     user_prompt=self.user_prompt,
@@ -2618,12 +2704,16 @@ class Orchestrator:
                         log_data["synthesis_status"] = "degraded"
                     else:
                         log_data["synthesis_status"] = "ok"
+            except StopIteration:
+                log_data["synthesis_status"] = "skipped_short_run"
             except Exception as syn_err:
                 print(f"[Synthesizer] Skipped due to error: {syn_err}")
                 log_data["synthesis_status"] = "failed"
 
             # --- AUTO-SCORE the final deliverable (two-pass) ---
             try:
+                if not should_postprocess:
+                    raise StopIteration("skip_short_run")
                 # Pass 1: fast heuristic scorer
                 best_deliverable = ""
                 if self.accepted:
@@ -2679,6 +2769,8 @@ class Orchestrator:
                             "scores": calibrated,
                         })
 
+            except StopIteration:
+                log_data["auto_score"] = {}
             except Exception as score_err:
                 print(f"[Scorer] Skipped: {score_err}")
 
@@ -2707,7 +2799,7 @@ class Orchestrator:
             )
 
 
-    def _validate_models(self) -> Dict[str, bool]:
+    def _validate_models_legacy(self) -> Dict[str, bool]:
         """Test each model before run; return per-model health map."""
         print("[Validation] Testing model reliability...")
 
@@ -2766,6 +2858,7 @@ class Orchestrator:
                     temperature=0.0,
                     tools=probe_tools,
                     tool_choice="auto",
+                    retry_attempts=1,
                 )
 
                 tool_calls = test_response.tool_calls or []
@@ -2774,10 +2867,10 @@ class Orchestrator:
                     for tc in tool_calls
                 )
                 if used_list_dirs:
-                    print(f"[Validation] ✓ Model {model} can issue tool calls")
+                    print(f"[Validation] [OK] Model {model} can issue tool calls")
                     health[model] = True
                 elif (test_response.text or "").strip():
-                    print(f"[Validation] ✓ Model {model} responded without tools")
+                    print(f"[Validation] [OK] Model {model} responded without tools")
                     health[model] = True
                 else:
                     preview = (test_response.text or "")[:100]
@@ -2791,4 +2884,3 @@ class Orchestrator:
         healthy_count = sum(1 for ok in health.values() if ok)
         print(f"[Validation] Healthy models: {healthy_count}/{len(self.models)}")
         return health
-

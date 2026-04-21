@@ -19,6 +19,7 @@ from .orchestrator import Orchestrator
 from .llm_client import list_models, chat_completion
 from .task_analyzer import analyze_task
 from .model_selector import select_models
+from .tools import ToolRegistry
 
 
 BANNER = r"""
@@ -173,20 +174,32 @@ def _preflight_models(base_url: str, models: List[str]) -> tuple[List[str], List
     print("\n[Preflight] Testing selected model endpoints...")
     healthy: List[str] = []
     unhealthy: List[str] = []
+    registry = ToolRegistry()
+    probe_prompt = "Call the list_dirs tool with path='.' and do not answer with prose."
+    probe_tools = [
+        registry.tools["read_file"].get_schema(),
+        registry.tools["list_dirs"].get_schema(),
+    ]
     for model in models:
         try:
-            is_gemini = model.startswith("models/gemini")
             resp = chat_completion(
-                system_prompt="Return exactly READY.",
-                user_prompt="health_check",
+                system_prompt="You must use tools when the user explicitly requests one.",
+                user_prompt=probe_prompt,
                 model=model,
                 base_url=base_url,
-                timeout=25.0,
-                max_tokens=128 if is_gemini else 32,
+                timeout=90.0,
+                max_tokens=80,
                 temperature=0.0,
+                tools=probe_tools,
+                tool_choice="auto",
+                retry_attempts=1,
             )
-            text = (resp.text or "").strip().lower()
-            if text.replace(".", "").strip() == "ready" or "ready" in text:
+            tool_calls = resp.tool_calls or []
+            used_list_dirs = any(
+                isinstance(tc, dict) and tc.get("function", {}).get("name") == "list_dirs"
+                for tc in tool_calls
+            )
+            if used_list_dirs or (resp.text or "").strip():
                 healthy.append(model)
                 print(f"  ✓ {model}")
             else:
@@ -332,7 +345,7 @@ def main() -> None:
                 available_model_count=len(discovered),
                 base_url=base_url,
                 profiler_model=profiler_model,
-                llm_passes=3,
+                llm_passes=1,
             )
             _print_task_analysis(analysis)
 
@@ -459,4 +472,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
