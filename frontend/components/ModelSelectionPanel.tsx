@@ -133,6 +133,9 @@ const ModelSelectionPanel: React.FC<Props> = ({ discoveredModels, prompt, apiUrl
     const selectedList = mode === 'auto'
         ? ranked.filter(r => r.selected).map(r => r.model)
         : Array.from(manualChecked);
+    const launchList = reliPhase === 'done'
+        ? reliResults.filter(r => r.status === 'ok').map(r => r.model)
+        : selectedList;
 
     // ── Render ───────────────────────────────────────────────────────────────
     return (
@@ -296,9 +299,24 @@ const ModelSelectionPanel: React.FC<Props> = ({ discoveredModels, prompt, apiUrl
 
                     {/* ── Launch ── */}
                     {reliPhase === 'done' && (
-                        <button onClick={() => onStartRun(selectedList)}
-                            style={{ flexShrink: 0, width: '100%', padding: '10px', background: 'linear-gradient(135deg,#22d3ee22,#818cf833)', border: '1px solid #22d3ee55', borderRadius: 10, cursor: 'pointer', fontSize: 13, color: '#22d3ee', fontWeight: 800, boxShadow: '0 0 20px #22d3ee11', letterSpacing: '-0.3px' }}>
-                            ▶ Start AGNN Negotiation
+                        <button
+                            onClick={() => onStartRun(launchList)}
+                            disabled={launchList.length === 0}
+                            style={{
+                                flexShrink: 0,
+                                width: '100%',
+                                padding: '10px',
+                                background: launchList.length > 0 ? 'linear-gradient(135deg,#22d3ee22,#818cf833)' : 'rgba(255,255,255,0.04)',
+                                border: launchList.length > 0 ? '1px solid #22d3ee55' : '1px solid rgba(255,255,255,0.07)',
+                                borderRadius: 10,
+                                cursor: launchList.length > 0 ? 'pointer' : 'default',
+                                fontSize: 13,
+                                color: launchList.length > 0 ? '#22d3ee' : '#334155',
+                                fontWeight: 800,
+                                boxShadow: launchList.length > 0 ? '0 0 20px #22d3ee11' : 'none',
+                                letterSpacing: '-0.3px'
+                            }}>
+                            ▶ Start AGNN Negotiation {launchList.length > 0 ? `(${launchList.length} verified)` : ''}
                         </button>
                     )}
 

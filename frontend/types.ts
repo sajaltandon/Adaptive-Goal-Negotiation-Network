@@ -21,7 +21,56 @@ export enum DecisionType {
   INFO = 'INFO',
 }
 
+export enum AgentRole {
+  RESEARCHER = 'Researcher',
+  CRITIC = 'Critic',
+  DRAFTER = 'Drafter',
+  REVIEWER = 'Reviewer',
+  GENERALIST = 'Generalist',
+}
+
 // ─── Agent / Team types ─────────────────────────────────────────────────────
+
+export interface AgentModel {
+  id: string;
+  name: string;
+  provider: string;
+  version: string;
+  avatarColor: string;
+  capabilities: string[];
+}
+
+export interface ActiveAgent {
+  id: string;
+  name: string;
+  role: AgentRole | string;
+  provider: string;
+  version: string;
+  avatarColor: string;
+  capabilities: string[];
+  confidence: number;
+  stats: {
+    turns: number;
+    accepted: number;
+    rewrites: number;
+    rejects: number;
+  };
+  isThinking: boolean;
+  status: string;
+  autoAdded?: boolean;
+}
+
+export interface Message {
+  id: string;
+  agentId: string;
+  agentName?: string;
+  role?: string;
+  content: string;
+  timestamp: number;
+  phase?: WorkflowPhase | string;
+  decision?: DecisionType;
+  isPhaseChange?: boolean;
+}
 
 export interface RoleDefinition {
   name: string;

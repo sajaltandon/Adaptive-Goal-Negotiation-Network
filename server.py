@@ -307,14 +307,19 @@ def start_run(req: RunRequest) -> Dict[str, str]:
 def stream(run_id: str):
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail="run_id not found")
+    run_queue = _runs[run_id]
 
     def event_stream():
+        finished = False
         while True:
-            event = _runs[run_id].get()
+            event = run_queue.get()
             payload = json.dumps(event, ensure_ascii=False)
             yield f"data: {payload}\n\n"
             if event.get("type") == "done":
+                finished = True
                 break
+        if finished and _runs.get(run_id) is run_queue:
+            _runs.pop(run_id, None)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

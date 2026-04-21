@@ -671,6 +671,12 @@ class ToolRegistry:
             "convert_markdown_to_pdf": ConvertMarkdownToPdfTool(),
             "bash": BashTool(),
         }
+        # Tool degradation is disabled by default because local LM Studio models
+        # frequently need the full tool surface to complete tasks at all.
+        # Re-enable only through an explicit env flag for targeted experiments.
+        self.enable_tool_degradation = os.environ.get("AGNN_ENABLE_TOOL_DEGRADATION", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
         
     def load_mcp_server(self, command: str, args: List[str]):
         try:
@@ -685,8 +691,8 @@ class ToolRegistry:
         
     def get_schemas(self, model: str = "", failure_level: int = 0) -> List[Dict[str, Any]]:
         all_schemas = [tool.get_schema() for tool in self.tools.values()]
-        
-        if not model:
+
+        if not model or not self.enable_tool_degradation:
             return all_schemas
             
         model_lower = model.lower()

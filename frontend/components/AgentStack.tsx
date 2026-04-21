@@ -9,7 +9,7 @@ interface AgentStackProps {
 }
 
 const AgentStack: React.FC<AgentStackProps> = ({ agents, appPhase, onConnectLMStudio }) => {
-  const [lmStudioUrl, setLmStudioUrl] = useState('http://10.119.170.167:1234');
+  const [lmStudioUrl, setLmStudioUrl] = useState('http://localhost:1234');
   const [isConnecting, setIsConnecting] = useState(false);
 
   const getRoleIcon = (role: AgentRole | string) => {
@@ -106,7 +106,7 @@ const AgentStack: React.FC<AgentStackProps> = ({ agents, appPhase, onConnectLMSt
             value={lmStudioUrl}
             onChange={(e) => setLmStudioUrl(e.target.value)}
             className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-slate-500"
-            placeholder="http://10.119.170.167:1234"
+            placeholder="http://localhost:1234"
           />
           <button
             onClick={handleConnect}

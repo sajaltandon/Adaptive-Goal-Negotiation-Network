@@ -78,7 +78,7 @@ const App: React.FC = () => {
   const [appPhase, setAppPhase] = useState<AppPhase>(AppPhase.SETUP);
   const [workflowPhase, setWorkflowPhase] = useState<WorkflowPhase>(WorkflowPhase.RESEARCH);
   const [navTab, setNavTab] = useState<string>('setup');
-  const [lmUrl, setLmUrl] = useState('http://10.119.170.167:1234');
+  const [lmUrl, setLmUrl] = useState('http://localhost:1234');
   const [prompt, setPrompt] = useState('');
   const [connStatus, setConnStatus] = useState<'idle' | 'ok' | 'err'>('idle');
   const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
