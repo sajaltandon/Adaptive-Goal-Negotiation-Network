@@ -1,0 +1,14 @@
+.env
+.env.local
+__pycache__/
+*.pyc
+tmp/
+frontend/node_modules/
+frontend/dist/
+agnn/logs/
+agnn/outputs/
+agnn/data/brain.json
+agnn/data/run_profiles.json
+technical_audit.log
+technical_audit_report.txt
+M&A_Diligence_Report.txt

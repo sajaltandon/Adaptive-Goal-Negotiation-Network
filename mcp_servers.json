@@ -1,0 +1,79 @@
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "description": "Enhanced file system operations — read, write, list, search files",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Users\\sajal\\Desktop",
+        "C:\\Users\\sajal\\Desktop\\AGNN_SAFE"
+      ]
+    },
+    {
+      "name": "memory",
+      "description": "Persistent knowledge graph — agents remember facts across tasks",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    {
+      "name": "sequential-thinking",
+      "description": "Forces structured step-by-step reasoning before acting — improves all complex tasks",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    {
+      "name": "fetch",
+      "description": "HTTP fetch + web scraping — free web research, no API key needed",
+      "command": "python",
+      "args": [
+        "-m",
+        "mcp_server_fetch"
+      ]
+    },
+    {
+      "name": "puppeteer",
+      "description": "Full browser control — navigate, click, screenshot, scrape any website",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-puppeteer"
+      ],
+      "_disabled": true,
+      "_note": "Disabled: slow startup causes MCP timeout. Enable manually when needed for browser demos."
+    },
+    {
+      "name": "excel",
+      "description": "Read and write real .xlsx Excel files — business-ready spreadsheet output",
+      "command": "npx",
+      "args": [
+        "-y",
+        "excel-mcp-server"
+      ],
+      "env": {
+        "EXCEL_MCP_PAGING_CELLS_LIMIT": "4000"
+      }
+    },
+    {
+      "name": "brave-search",
+      "description": "Live web search via Brave Search API",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-brave-search"
+      ],
+      "env": {
+        "BRAVE_API_KEY": ""
+      },
+      "_disabled": true,
+      "_note": "Get free key at https://api.search.brave.com — add key above and remove _disabled"
+    }
+  ]
+}

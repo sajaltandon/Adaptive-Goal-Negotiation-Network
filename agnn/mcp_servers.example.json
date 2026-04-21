@@ -1,0 +1,12 @@
+{
+  "servers": [
+    {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Users\\sajal\\Desktop\\AGNN_SAFE"
+      ]
+    }
+  ]
+}

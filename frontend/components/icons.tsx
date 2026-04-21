@@ -1,0 +1,45 @@
+import React from 'react';
+import { 
+  Activity, 
+  BrainCircuit, 
+  CheckCircle2, 
+  ChevronRight, 
+  Clock, 
+  Code2, 
+  Database, 
+  Download, 
+  FileText, 
+  LayoutDashboard, 
+  MessageSquare, 
+  Play, 
+  RefreshCw, 
+  Search, 
+  Settings2, 
+  ShieldAlert, 
+  Users, 
+  Zap,
+  X
+} from 'lucide-react';
+
+export const Icons = {
+  Activity,
+  Brain: BrainCircuit,
+  BrainCircuit,
+  Check: CheckCircle2,
+  ChevronRight,
+  Clock,
+  Code: Code2,
+  Database,
+  Download,
+  File: FileText,
+  Dashboard: LayoutDashboard,
+  Message: MessageSquare,
+  Play,
+  Refresh: RefreshCw,
+  Search,
+  Settings: Settings2,
+  Alert: ShieldAlert,
+  Users,
+  Zap,
+  X
+};

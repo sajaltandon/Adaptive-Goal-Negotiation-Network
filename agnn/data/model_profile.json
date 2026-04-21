@@ -1,0 +1,346 @@
+{
+  "qwen2.5-7b-instruct": {
+    "reliability": 0.65,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "last_seen": 1772278694
+  },
+  "llama-3.1-8b-instruct": {
+    "reliability": 0.65,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "last_seen": 1772278694
+  },
+  "mistral-7b-instruct": {
+    "reliability": 0.65,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "last_seen": 1772278694
+  },
+  "gemma-2-9b-it": {
+    "reliability": 0.65,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "last_seen": 1772278694
+  },
+  "google/gemma-3n-e4b": {
+    "reliability": 0.851696,
+    "probe_quality": 0.8375750000000002,
+    "latency_seconds": 6.95877734820048,
+    "capabilities": {
+      "reasoning": 0.8744,
+      "analysis": 0.8788,
+      "planning": 0.8888,
+      "writing": 0.5175,
+      "critique": 0.5088,
+      "coding": 0.5044,
+      "speed": 0.142,
+      "context": 0.8925
+    },
+    "last_seen": 1772286098
+  },
+  "google/gemma-3-4b": {
+    "reliability": 0.851696,
+    "probe_quality": 0.8022175000000001,
+    "latency_seconds": 13.81625747680664,
+    "capabilities": {
+      "reasoning": 0.8381,
+      "analysis": 0.8337,
+      "planning": 0.6981,
+      "writing": 0.4956,
+      "critique": 0.4825,
+      "coding": 0.4803,
+      "speed": 0.0356,
+      "context": 0.79
+    },
+    "last_seen": 1772286163
+  },
+  "qwen/qwen3-vl-4b": {
+    "reliability": 0.8713568,
+    "probe_quality": 0.8819972500000002,
+    "latency_seconds": 4.032820701599121,
+    "capabilities": {
+      "reasoning": 0.8947,
+      "analysis": 0.9686,
+      "planning": 0.5972,
+      "writing": 0.8033,
+      "critique": 0.5022,
+      "coding": 0.5011,
+      "speed": 0.3841,
+      "context": 0.597
+    },
+    "last_seen": 1776778666
+  },
+  "mistralai/ministral-3-3b": {
+    "reliability": 0.8713568,
+    "probe_quality": 0.8776866250000002,
+    "latency_seconds": 12.579126834869385,
+    "capabilities": {
+      "reasoning": 0.8958,
+      "analysis": 0.9702,
+      "planning": 0.5983,
+      "writing": 0.8049,
+      "critique": 0.5033,
+      "coding": 0.5011,
+      "speed": 0.0368,
+      "context": 0.597
+    },
+    "last_seen": 1772288510
+  },
+  "m1": {
+    "reliability": 0.65,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "capabilities": {
+      "reasoning": 0.5,
+      "analysis": 0.5,
+      "planning": 0.5,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.5,
+      "context": 0.5
+    },
+    "last_seen": 1772281235
+  },
+  "m2": {
+    "reliability": 0.65,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "capabilities": {
+      "reasoning": 0.5,
+      "analysis": 0.5,
+      "planning": 0.5,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.5,
+      "context": 0.5
+    },
+    "last_seen": 1772281235
+  },
+  "m3": {
+    "reliability": 0.65,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "capabilities": {
+      "reasoning": 0.5,
+      "analysis": 0.5,
+      "planning": 0.5,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.5,
+      "context": 0.5
+    },
+    "last_seen": 1772281235
+  },
+  "qwen3-vl-2b-instruct": {
+    "reliability": 0.9496286179882145,
+    "probe_quality": 0.9019663745654525,
+    "latency_seconds": 3.8285365104675293,
+    "capabilities": {
+      "reasoning": 0.8951,
+      "analysis": 0.8942,
+      "planning": 0.9231,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5035,
+      "speed": 0.5159,
+      "context": 0.9086
+    },
+    "last_seen": 1776755198
+  },
+  "ruvltra-claude-code": {
+    "reliability": 0.9496286179882145,
+    "probe_quality": 0.7761068831590516,
+    "latency_seconds": 5.100296815236409,
+    "capabilities": {
+      "reasoning": 0.8082,
+      "analysis": 0.7986,
+      "planning": 0.7824,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5035,
+      "speed": 0.362,
+      "context": 0.7905
+    },
+    "last_seen": 1772857022
+  },
+  "google/gemma-3-1b": {
+    "reliability": 0.8721232062522366,
+    "probe_quality": 0.7881078686772478,
+    "latency_seconds": 6.139144500096639,
+    "capabilities": {
+      "reasoning": 0.8008,
+      "analysis": 0.7906,
+      "planning": 0.7882,
+      "writing": 0.5001,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.2372,
+      "context": 0.7894
+    },
+    "last_seen": 1772857022
+  },
+  "liquid/lfm2-1.2b": {
+    "reliability": 0.8719594345826107,
+    "probe_quality": 0.8219962534733637,
+    "latency_seconds": 4.519042015075684,
+    "capabilities": {
+      "reasoning": 0.8,
+      "analysis": 0.8188,
+      "planning": 0.8238,
+      "writing": 0.5001,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.426,
+      "context": 0.8213
+    },
+    "last_seen": 1772857022
+  },
+  "qwen3.5-2b": {
+    "reliability": 0.9097346816000003,
+    "probe_quality": 0.8337087318326954,
+    "latency_seconds": 9.897531112035116,
+    "capabilities": {
+      "reasoning": 0.8156,
+      "analysis": 0.8003,
+      "planning": 0.8988,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5035,
+      "speed": 0.0195,
+      "context": 0.8496
+    },
+    "last_seen": 1772857022
+  },
+  "google/gemma-4-e4b": {
+    "reliability": 0.65,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "capabilities": {
+      "reasoning": 0.5,
+      "analysis": 0.5,
+      "planning": 0.5,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.5,
+      "context": 0.5
+    },
+    "last_seen": 1776778666
+  },
+  "models/gemini-2.5-flash": {
+    "reliability": 0.71,
+    "probe_quality": 0.0,
+    "latency_seconds": 15.688132286071777,
+    "capabilities": {
+      "reasoning": 0.125,
+      "analysis": 0.5,
+      "planning": 0.125,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.125,
+      "context": 0.5
+    },
+    "last_seen": 1776778627
+  },
+  "models/gemini-2.5-pro": {
+    "reliability": 0.5525,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "capabilities": {
+      "reasoning": 0.5,
+      "analysis": 0.5,
+      "planning": 0.5,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.5,
+      "context": 0.5
+    },
+    "last_seen": 1776778642
+  },
+  "models/gemini-2.0-flash-lite": {
+    "reliability": 0.5525,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "capabilities": {
+      "reasoning": 0.5,
+      "analysis": 0.5,
+      "planning": 0.5,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.5,
+      "context": 0.5
+    },
+    "last_seen": 1776778643
+  },
+  "models/gemini-2.5-flash-8b": {
+    "reliability": 0.5525,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "capabilities": {
+      "reasoning": 0.5,
+      "analysis": 0.5,
+      "planning": 0.5,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.5,
+      "context": 0.5
+    },
+    "last_seen": 1776778644
+  },
+  "groq/llama-3.3-70b-versatile": {
+    "reliability": 0.71,
+    "probe_quality": 0.363,
+    "latency_seconds": 0.5985519886016846,
+    "capabilities": {
+      "reasoning": 0.575,
+      "analysis": 0.5,
+      "planning": 0.875,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.725,
+      "speed": 0.8189,
+      "context": 0.5
+    },
+    "last_seen": 1776778654
+  },
+  "groq/llama-3.1-8b-instant": {
+    "reliability": 0.71,
+    "probe_quality": 0.375,
+    "latency_seconds": 0.9472710291544596,
+    "capabilities": {
+      "reasoning": 0.725,
+      "analysis": 0.5,
+      "planning": 0.875,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.65,
+      "speed": 0.7862,
+      "context": 0.5
+    },
+    "last_seen": 1776778666
+  },
+  "groq/gemma2-9b-it": {
+    "reliability": 0.65,
+    "probe_quality": 0.0,
+    "latency_seconds": 2.0,
+    "capabilities": {
+      "reasoning": 0.5,
+      "analysis": 0.5,
+      "planning": 0.5,
+      "writing": 0.5,
+      "critique": 0.5,
+      "coding": 0.5,
+      "speed": 0.5,
+      "context": 0.5
+    },
+    "last_seen": 1776778666
+  }
+}
