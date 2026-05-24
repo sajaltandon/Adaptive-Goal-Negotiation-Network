@@ -5,7 +5,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![LM Studio Compatible](https://img.shields.io/badge/LM_Studio-Compatible-blueviolet.svg)](https://lmstudio.ai/)
-[![Local Only](https://img.shields.io/badge/Privacy-100%25_Local-brightgreen)](https://github.com/agnn)
+[![Local Only](https://img.shields.io/badge/Privacy-100%25_Local-brightgreen)]
 
 AGNN is an advanced research framework that coordinates small, local Large Language Models (LLMs) to solve complex engineering, architecture, and strategy problems *entirely autonomously*. By forcing models to negotiate roles, grade each other's work mathematically, and execute phased pipelines, AGNN achieves outputs previously reserved for massive frontier models.
 
